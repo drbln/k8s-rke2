@@ -1,0 +1,64 @@
+# Uninstalling RKE2
+sudo sh /usr/local/bin/rke2-uninstall.sh
+
+# Доступ к kubectl rke2
+export KUBECONFIG=/etc/rancher/rke2/rke2.yaml PATH=$PATH:/var/lib/rancher/rke2/bin
+sudo chown $(id -u):$(id -g) /etc/rancher/rke2/rke2.yaml
+
+### Установка мастер ноды 
+
+# Configure the rke2
+sudo mkdir -p /etc/rancher/rke2/
+sudo nano /etc/rancher/rke2/config.yaml
+
+
+# Content for config.yaml:
+
+cluster-cidr: "10.244.0.0/16"
+service-cidr: "10.245.0.0/16"
+
+# Run the installer
+curl -sfL https://get.rke2.io |sudo sh -
+
+# Enable the rke2-server service
+sudo systemctl enable rke2-server.service
+
+# Start the service
+sudo systemctl start rke2-server.service
+
+# Follow the logs, if you like
+sudo journalctl -u rke2-server -f
+
+
+# сброс настроек
+sudo rke2-killall.sh
+
+# A token that can be used to register other server or agent nodes will be created at
+/var/lib/rancher/rke2/server/node-token
+
+
+
+
+### Установка worker ноды
+# Run the installer
+curl -sfL https://get.rke2.io | INSTALL_RKE2_TYPE="agent" sudo sh -
+
+
+# Configure the rke2-agent service
+sudo mkdir -p /etc/rancher/rke2/
+sudo nano /etc/rancher/rke2/config.yaml
+
+# Content for config.yaml:
+server: https://
+token: 
+
+
+
+# Enable the rke2-agent service
+sudo systemctl enable rke2-agent.service
+
+# Start the service
+sudo systemctl start rke2-agent.service
+
+# Follow the logs, if you like
+sudo journalctl -u rke2-server -f

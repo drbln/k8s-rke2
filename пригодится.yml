@@ -1,0 +1,16 @@
+# журнал kubelet
+sudo journalctl -u kubelet
+
+systemctl status kubelet
+
+#Для дрйвера nvidia
+sudo apt-get install dkms
+
+nvidia-smi
+
+# Add "contrib" and "non-free" components to /etc/apt/sources.list, for example
+deb http://deb.debian.org/debian/ bullseye main contrib non-free
+
+# Update the list of available packages, then we can install the nvidia-driver package, plus the necessary firmware:
+sudo apt update
+sudo apt install nvidia-driver firmware-misc-nonfree

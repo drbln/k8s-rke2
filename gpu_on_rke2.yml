@@ -1,0 +1,69 @@
+# Preparing your GPU Nodes
+distribution=$(. /etc/os-release;echo $ID$VERSION_ID)
+curl -s -L https://nvidia.github.io/libnvidia-container/gpgkey | sudo apt-key add -
+curl -s -L https://nvidia.github.io/libnvidia-container/stable/deb/nvidia-container-toolkit.list | sudo tee /etc/apt/sources.list.d/libnvidia-container.list
+
+sudo apt-get update && sudo apt-get install -y nvidia-container-toolkit
+
+
+# Изменение для ванильного кластера 
+sudo nano /etc/containerd/config.toml
+
+# Configure containerd worker для rke2
+sudo nano /var/lib/rancher/rke2/agent/etc/containerd/config.toml.tmpl
+
+# Add in file config.toml.tmpl
+version = 2
+[plugins]
+  [plugins."io.containerd.grpc.v1.cri"]
+    [plugins."io.containerd.grpc.v1.cri".containerd]
+      default_runtime_name = "nvidia"
+
+      [plugins."io.containerd.grpc.v1.cri".containerd.runtimes]
+        [plugins."io.containerd.grpc.v1.cri".containerd.runtimes.nvidia]
+          privileged_without_host_devices = false
+          runtime_engine = ""
+          runtime_root = ""
+          runtime_type = "io.containerd.runc.v2"
+          [plugins."io.containerd.grpc.v1.cri".containerd.runtimes.nvidia.options]
+            BinaryName = "/usr/bin/nvidia-container-runtime"
+
+# restart rke2 service
+sudo systemctl restart rke2-agent.service
+
+
+# Add NVIDIA helm repo
+helm repo add nvidia https://nvidia.github.io/gpu-operator
+helm repo update
+
+# install the NVIDIA GPU Operator as follows:
+https://nebuly-ai.github.io/nos/prerequisites/
+
+helm install --generate-name \
+     -n gpu-operator --create-namespace \
+     nvidia/gpu-operator \
+     --set driver.enabled=true \
+     --set migManager.enabled=false \
+     --set mig.strategy=mixed \
+     --set toolkit.enabled=true
+
+
+     
+# You can install Nebuly's device plugin using Helm as follows:
+helm install oci://ghcr.io/nebuly-ai/helm-charts/nvidia-device-plugin \
+  --version 0.13.0 \
+  --generate-name \
+  -n nebuly-nvidia \
+  --create-namespace
+
+
+#  Install nos using Helm 3
+helm install oci://ghcr.io/nebuly-ai/helm-charts/nos \
+  --version 0.1.2 \
+  --namespace nebuly-nos \
+  --generate-name \
+  --create-namespace
+
+
+# Enable automatic partitioning
+kubectl label nodes epyc-host01 "nos.nebuly.com/gpu-partitioning=mps"

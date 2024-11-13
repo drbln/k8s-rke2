@@ -1,0 +1,153 @@
+
+https://kubernetes.io/docs/setup/production-environment/tools/kubeadm/create-cluster-kubeadm/
+
+# Forwarding IPv4 and letting iptables see bridged traffic
+cat <<EOF | sudo tee /etc/modules-load.d/k8s.conf
+overlay
+br_netfilter
+EOF
+
+sudo modprobe overlay
+sudo modprobe br_netfilter
+
+# Disable swap
+sudo swapoff -a
+
+# sysctl params required by setup, params persist across reboots
+cat <<EOF | sudo tee /etc/sysctl.d/k8s.conf
+net.bridge.bridge-nf-call-iptables  = 1
+net.bridge.bridge-nf-call-ip6tables = 1
+net.ipv4.ip_forward                 = 1
+EOF
+
+# Apply sysctl params without reboot
+sudo sysctl --system
+
+# Install CNI plugins (required for most pod network):
+CNI_PLUGINS_VERSION="v1.5.1"
+ARCH="amd64"
+DEST="/opt/cni/bin"
+sudo mkdir -p "$DEST"
+curl -L "https://github.com/containernetworking/plugins/releases/download/${CNI_PLUGINS_VERSION}/cni-plugins-linux-${ARCH}-${CNI_PLUGINS_VERSION}.tgz" | sudo tar -C "$DEST" -xz
+
+DOWNLOAD_DIR="/usr/local/bin"
+sudo mkdir -p "$DOWNLOAD_DIR"
+
+# Install crictl (required for kubeadm / Kubelet Container Runtime Interface (CRI)):
+
+CRICTL_VERSION="v1.28.0"
+ARCH="amd64"
+curl -L "https://github.com/kubernetes-sigs/cri-tools/releases/download/${CRICTL_VERSION}/crictl-${CRICTL_VERSION}-linux-${ARCH}.tar.gz" | sudo tar -C $DOWNLOAD_DIR -xz
+
+# Install kubeadm, kubelet and add a kubelet systemd service:
+RELEASE="$(curl -sSL https://dl.k8s.io/release/stable.txt)"
+ARCH="amd64"
+cd $DOWNLOAD_DIR
+sudo curl -L --remote-name-all https://dl.k8s.io/release/${RELEASE}/bin/linux/${ARCH}/{kubeadm,kubelet}
+sudo chmod +x {kubeadm,kubelet}
+
+
+RELEASE_VERSION="v0.16.2"
+curl -sSL "https://raw.githubusercontent.com/kubernetes/release/${RELEASE_VERSION}/cmd/krel/templates/latest/kubelet/kubelet.service" | sed "s:/usr/bin:${DOWNLOAD_DIR}:g" | sudo tee /usr/lib/systemd/system/kubelet.service
+sudo mkdir -p /usr/lib/systemd/system/kubelet.service.d
+curl -sSL "https://raw.githubusercontent.com/kubernetes/release/${RELEASE_VERSION}/cmd/krel/templates/latest/kubeadm/10-kubeadm.conf" | sed "s:/usr/bin:${DOWNLOAD_DIR}:g" | sudo tee /usr/lib/systemd/system/kubelet.service.d/10-kubeadm.conf
+sudo systemctl enable kubelet.service
+
+# Install kubectl:
+cd ~
+curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
+sudo install -o root -g root -m 0755 kubectl /usr/local/bin/kubectl
+kubectl version --client
+
+# Install containerd:
+CONTAINERD_VERSION="1.7.21"
+wget https://github.com/containerd/containerd/releases/download/v${CONTAINERD_VERSION}/containerd-${CONTAINERD_VERSION}-linux-amd64.tar.gz
+sudo tar Czxvf /usr/local containerd-${CONTAINERD_VERSION}-linux-amd64.tar.gz
+
+wget https://raw.githubusercontent.com/containerd/containerd/main/containerd.service
+sudo mv containerd.service /usr/lib/systemd/system/
+sudo apt install
+sudo systemctl daemon-reload
+sudo systemctl enable --now containerd
+
+# Install runC
+RUNC_VERSION="v1.1.13"
+wget https://github.com/opencontainers/runc/releases/download/${RUNC_VERSION}/runc.amd64
+sudo install -m 755 runc.amd64 /usr/local/sbin/runc
+
+# Containerd configuration for Kubernetes
+sudo mkdir -p /etc/containerd/
+containerd config default | sudo tee /etc/containerd/config.toml
+
+sudo sed -i 's/SystemdCgroup \= false/SystemdCgroup \= true/g' /etc/containerd/config.toml
+
+sudo systemctl restart containerd
+
+# Install conntrack:
+sudo apt -y install conntrack
+
+# Init cluster:
+sudo kubeadm init --pod-network-cidr=10.244.0.0/16
+
+# Install flannel
+kubectl apply -f https://github.com/flannel-io/flannel/releases/latest/download/kube-flannel.yml
+
+
+mkdir -p $HOME/.kube
+  sudo cp -i /etc/kubernetes/admin.conf $HOME/.kube/config
+  sudo chown $(id -u):$(id -g) $HOME/.kube/config
+
+
+# Если занят порт 10250
+sudo kill $(sudo lsof -t -i:10250)
+
+
+# Join cluster
+sudo kubeadm join 10.136.35.22:6443 --token svbx6b.7yg4cfhrnyv7a9cu \
+        --discovery-token-ca-cert-hash sha256:34e0c65fc2b6a742e51a9351647e70dd7c1c112b5a13c001c1b23a7a4af03981
+
+
+# Join cluster: master
+sudo kubeadm join 10.136.35.22:6443 --token wk9mqk.pp27nziwk9ndlp41 \
+        --discovery-token-ca-cert-hash sha256:100beae6f3224c7a4545a2e3d79243a29d50e15b772c2907dfa8d722c5e03513  --control-plane --certificate-key 5e1c4a23247cf50cd6958e2a1f63971458119acc26b719a152c8f969adf75fa7
+
+
+# Install dashboard
+kubectl apply -f https://raw.githubusercontent.com/kubernetes/dashboard/v2.7.0/aio/deploy/recommended.yaml
+# Edit config    "type: NodePort"
+kubectl -n kube-system edit service kubernetes-dashboard -n kubernetes-dashboard
+# Install metrics-serve
+wget https://github.com/kubernetes-sigs/metrics-server/releases/latest/download/high-availability-1.21+.yaml
+# - --kubelet-insecure-tls в раздел "args":
+nano high-availability-1.21+.yaml
+
+#Create dashboard_acc.yaml
+nano dashboard_acc.yaml
+
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: admin-user
+  namespace: kube-system
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: admin-user
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: cluster-admin
+subjects:
+- kind: ServiceAccount
+  name: admin-user
+  namespace: kube-system
+
+# Apply config
+kubectl apply -f dashboard_acc.yaml
+
+# List all port forwards across all services
+kubectl get svc --all-namespaces
+
+# Generate token
+kubectl -n kube-system create token admin-user
